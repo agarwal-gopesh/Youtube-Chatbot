@@ -15,7 +15,7 @@ def extract_video_id(url):
     raise ValueError(f"Could not find a video ID in: {url}")
 
 
-def get_transcript_with_language(url):
+def get_timed_transcript(url):
     video_id = extract_video_id(url)
     transcript_list = YouTubeTranscriptApi().list(video_id)
 
@@ -27,18 +27,34 @@ def get_transcript_with_language(url):
         except NoTranscriptFound:
             transcript = next(iter(transcript_list))
 
-    text = " ".join(snippet.text for snippet in transcript.fetch())
-    text = re.sub(r"\s+", " ", text).strip()
-    return text, transcript.language_code
+    pieces = []
+    time_marks = []
+    position = 0
+
+    for snippet in transcript.fetch():
+        piece = re.sub(r"\s+", " ", snippet.text).strip()
+        if not piece:
+            continue
+        time_marks.append((position, snippet.start))
+        pieces.append(piece)
+        position += len(piece) + 1
+
+    text = " ".join(pieces)
+    return text, transcript.language_code, time_marks
+
+
+def get_transcript_with_language(url):
+    text, language, _ = get_timed_transcript(url)
+    return text, language
 
 
 def get_transcript(url):
-    text, _ = get_transcript_with_language(url)
+    text, _, _ = get_timed_transcript(url)
     return text
 
 
 if __name__ == "__main__":
     link = input("YouTube link: ")
-    text, lang = get_transcript_with_language(link)
-    print(f"Language: {lang}, Characters: {len(text)}")
+    text, lang, marks = get_timed_transcript(link)
+    print(f"Language: {lang}, Characters: {len(text)}, Timestamps: {len(marks)}")
     print(text[:500])

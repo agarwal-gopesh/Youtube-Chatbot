@@ -1,8 +1,11 @@
+import json
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from graph import chats, create_chat, list_chats, ask, get_history
+from graph import chats, create_chat, list_chats, ask, ask_stream, get_history
 
 app = FastAPI(title="YouTube Chatbot API")
 
@@ -50,3 +53,15 @@ def get_messages(thread_id: str):
 def send_message(thread_id: str, body: Question):
     check_chat(thread_id)
     return {"answer": ask(thread_id, body.question)}
+
+
+@app.post("/chats/{thread_id}/messages/stream")
+def stream_message(thread_id: str, body: Question):
+    check_chat(thread_id)
+
+    def events():
+        for token in ask_stream(thread_id, body.question):
+            yield f"data: {json.dumps({'token': token}, ensure_ascii=False)}\n\n"
+        yield 'data: {"done": true}\n\n'
+
+    return StreamingResponse(events(), media_type="text/event-stream")

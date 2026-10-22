@@ -1,11 +1,15 @@
+from bisect import bisect_right
+
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 
-from transcript import extract_video_id, get_transcript_with_language
+from transcript import extract_video_id, get_timed_transcript
 
 CHROMA_DIR = "chroma_db"
 COLLECTION_NAME = "youtube_videos"
+CHUNK_SIZE = 1000
+CHUNK_OVERLAP = 200
 
 embeddings = HuggingFaceEmbeddings(
     model_name="BAAI/bge-m3",
@@ -20,15 +24,27 @@ vector_store = Chroma(
 )
 
 splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1000,
-    chunk_overlap=200,
+    chunk_size=CHUNK_SIZE,
+    chunk_overlap=CHUNK_OVERLAP,
     separators=["\n\n", "\n", "।", ".", "?", "!", " ", ""],
+    add_start_index=True,
 )
 
 
 def is_indexed(video_id):
     result = vector_store.get(where={"video_id": video_id}, limit=1)
-    return len(result["ids"]) > 0
+    if not result["ids"]:
+        return False
+    if "start_time" in result["metadatas"][0]:
+        return True
+    vector_store.delete(where={"video_id": video_id})
+    return False
+
+
+def time_at(time_marks, char_index):
+    offsets = [offset for offset, _ in time_marks]
+    position = max(bisect_right(offsets, char_index) - 1, 0)
+    return int(time_marks[position][1])
 
 
 def index_video(url):
@@ -36,21 +52,23 @@ def index_video(url):
     if is_indexed(video_id):
         return video_id
 
-    text, language = get_transcript_with_language(url)
-    chunks = splitter.split_text(text)
+    text, language, time_marks = get_timed_transcript(url)
+    docs = splitter.create_documents([text])
 
+    texts = [doc.page_content for doc in docs]
     metadatas = [
         {
             "video_id": video_id,
             "language": language,
             "chunk_index": i,
+            "start_time": time_at(time_marks, doc.metadata["start_index"]),
             "url": url,
         }
-        for i in range(len(chunks))
+        for i, doc in enumerate(docs)
     ]
-    ids = [f"{video_id}_{i}" for i in range(len(chunks))]
+    ids = [f"{video_id}_{i}" for i in range(len(docs))]
 
-    vector_store.add_texts(texts=chunks, metadatas=metadatas, ids=ids)
+    vector_store.add_texts(texts=texts, metadatas=metadatas, ids=ids)
     return video_id
 
 
@@ -70,8 +88,11 @@ if __name__ == "__main__":
         if not question:
             break
         results = vector_store.similarity_search_with_score(
-            question, k=6, filter={"video_id": video_id}
+            question, k=4, filter={"video_id": video_id}
         )
         for doc, score in results:
-            print(f"\n[score {score:.3f}] chunk {doc.metadata['chunk_index']}")
+            print(
+                f"\n[score {score:.3f}] chunk {doc.metadata['chunk_index']} "
+                f"at {doc.metadata['start_time']}s"
+            )
             print(doc.page_content)

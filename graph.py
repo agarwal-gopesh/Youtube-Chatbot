@@ -13,11 +13,13 @@ from vector_store import index_video, get_retriever, vector_store
 
 load_dotenv()
 
-MODEL_NAME = "gemini-3.6-flash"
+FAST_MODEL = "gemini-3.6-flash"
+ANSWER_MODEL = FAST_MODEL
 TOP_K = 6
 INTRO_CHUNKS = 3
 
-llm = ChatGoogleGenerativeAI(model=MODEL_NAME, temperature=0.3)
+fast_llm = ChatGoogleGenerativeAI(model=FAST_MODEL)
+answer_llm = ChatGoogleGenerativeAI(model=ANSWER_MODEL)
 chats = {}
 
 
@@ -50,7 +52,20 @@ def rewrite_query(state: ChatState):
         f"without the chat history. Return only the question.\n\n"
         f"Last question: {question}"
     )
-    return {"query": to_text(llm.invoke(prompt).content).strip()}
+    return {"query": to_text(fast_llm.invoke(prompt).content).strip()}
+
+
+def format_time(seconds):
+    minutes, secs = divmod(int(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def timestamp_label(video_id, seconds):
+    link = f"https://youtu.be/{video_id}?t={int(seconds)}"
+    return f"[{format_time(seconds)}]({link})"
 
 
 def retrieve(state: ChatState):
@@ -58,14 +73,19 @@ def retrieve(state: ChatState):
     chunks = {}
 
     for doc in get_retriever(video_id, k=TOP_K).invoke(state["query"]):
-        chunks[doc.metadata["chunk_index"]] = doc.page_content
+        chunks[doc.metadata["chunk_index"]] = (doc.page_content, doc.metadata)
 
     intro = vector_store.get(ids=[f"{video_id}_{i}" for i in range(INTRO_CHUNKS)])
     for text, meta in zip(intro["documents"], intro["metadatas"]):
-        chunks[meta["chunk_index"]] = text
+        chunks[meta["chunk_index"]] = (text, meta)
 
-    context = "\n\n".join(chunks[i] for i in sorted(chunks))
-    return {"context": context}
+    parts = []
+    for index in sorted(chunks):
+        text, meta = chunks[index]
+        label = timestamp_label(video_id, meta.get("start_time", 0))
+        parts.append(f"{label} {text}")
+
+    return {"context": "\n\n".join(parts)}
 
 
 def generate(state: ChatState):
@@ -74,9 +94,14 @@ def generate(state: ChatState):
         "excerpts below. The excerpts may be in Hindi, Hinglish or another language. "
         "Answer in the same language as the user's question. "
         "If the answer is not in the excerpts, say you could not find it in the video.\n\n"
+        "Each excerpt starts with a timestamp link showing where it begins in the video. "
+        "Do not mention timestamps unless the user explicitly asks for them, or asks "
+        "where or when something is said in the video. In that case, give the timestamp "
+        "of the most relevant excerpt exactly as written, including its link, and say "
+        "the topic is discussed around that time.\n\n"
         f"Transcript excerpts:\n{state['context']}"
     )
-    response = llm.invoke([SystemMessage(system_prompt)] + state["messages"])
+    response = answer_llm.invoke([SystemMessage(system_prompt)] + state["messages"])
     return {"messages": [response]}
 
 
@@ -129,6 +154,20 @@ def ask(thread_id, question):
     return to_text(result["messages"][-1].content)
 
 
+def ask_stream(thread_id, question):
+    chat = chats[thread_id]
+    stream = graph.stream(
+        {"messages": [HumanMessage(question)], "video_id": chat["video_id"]},
+        config={"configurable": {"thread_id": thread_id}},
+        stream_mode="messages",
+    )
+    for chunk, metadata in stream:
+        if metadata.get("langgraph_node") == "generate":
+            text = to_text(chunk.content)
+            if text:
+                yield text
+
+
 def get_history(thread_id):
     state = graph.get_state({"configurable": {"thread_id": thread_id}})
     messages = state.values.get("messages", [])
@@ -149,4 +188,7 @@ if __name__ == "__main__":
         question = input("\nYou (empty to quit): ")
         if not question:
             break
-        print("\nBot:", ask(chat["thread_id"], question))
+        print("\nBot: ", end="")
+        for token in ask_stream(chat["thread_id"], question):
+            print(token, end="", flush=True)
+        print()
