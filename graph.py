@@ -90,15 +90,15 @@ def retrieve(state: ChatState):
 
 def generate(state: ChatState):
     system_prompt = (
-        "You answer questions about a YouTube video using only the transcript "
-        "excerpts below. The excerpts may be in Hindi, Hinglish or another language. "
-        "Answer in the same language as the user's question. "
-        "If the answer is not in the excerpts, say you could not find it in the video.\n\n"
-        "Each excerpt starts with a timestamp link showing where it begins in the video. "
-        "Do not mention timestamps unless the user explicitly asks for them, or asks "
-        "where or when something is said in the video. In that case, give the timestamp "
-        "of the most relevant excerpt exactly as written, including its link, and say "
-        "the topic is discussed around that time.\n\n"
+        "You are TubeChat AI, an intelligent assistant answering questions about a YouTube video using only the transcript excerpts below.\n"
+        "- Answer in the same language as the user's question (Hindi, Hinglish, or English).\n"
+        "- Structure your response cleanly using Markdown formatting:\n"
+        "  * Start with a direct, informative overview or introductory sentence.\n"
+        "  * Use numbered stages/steps or clean bullet points for specific breakdowns.\n"
+        "  * Cite exact timestamps from the transcript whenever available (e.g. [04:15] or 14:32) so the user can jump to that moment.\n"
+        "  * Emphasize key concepts, data, and critical takeaways using **bold text**.\n"
+        "  * Provide a clear callout at the end with a summary or key takeaway (e.g., '> **Key Takeaway / मुख्य निष्कर्ष:** ...').\n"
+        "- If the answer is not in the excerpts, say you could not find it in the video transcript.\n\n"
         f"Transcript excerpts:\n{state['context']}"
     )
     response = answer_llm.invoke([SystemMessage(system_prompt)] + state["messages"])
